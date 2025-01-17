@@ -2,17 +2,12 @@
 
 from typing import Any
 
+from homeassistant.const import CONF_USERNAME
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import issue_registry as ir
 from proxmoxer import ProxmoxAPI
 from proxmoxer.core import ResourceException
 from requests.exceptions import ConnectTimeout
-
-from homeassistant.const import CONF_USERNAME
-from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.issue_registry import (
-    IssueSeverity,
-    async_create_issue,
-    async_delete_issue,
-)
 
 from .const import (
     DEFAULT_PORT,
@@ -35,38 +30,47 @@ class ProxmoxClient:
         host: str,
         user: str,
         password: str,
+        token_name: str = "",
         port: int | None = DEFAULT_PORT,
         realm: str | None = DEFAULT_REALM,
         verify_ssl: bool | None = DEFAULT_VERIFY_SSL,
     ) -> None:
         """Initialize the ProxmoxClient."""
-
         self._host = host
         self._port = port
         self._user = user
+        self._token_name = token_name
         self._realm = realm
         self._password = password
         self._verify_ssl = verify_ssl
 
     def build_client(self) -> None:
-        """Construct the ProxmoxAPI client.
+        """
+        Construct the ProxmoxAPI client.
 
         Allows inserting the realm within the `user` value.
         """
+        user_id = self._user if "@" in self._user else f"{self._user}@{self._realm}"
 
-        if "@" in self._user:
-            user_id = self._user
+        if self._token_name:
+            self._proxmox = ProxmoxAPI(
+                self._host,
+                port=self._port,
+                user=user_id,
+                token_name=self._token_name,
+                token_value=self._password,
+                verify_ssl=self._verify_ssl,
+                timeout=30,
+            )
         else:
-            user_id = f"{self._user}@{self._realm}"
-
-        self._proxmox = ProxmoxAPI(
-            self._host,
-            port=self._port,
-            user=user_id,
-            password=self._password,
-            verify_ssl=self._verify_ssl,
-            timeout=30,
-        )
+            self._proxmox = ProxmoxAPI(
+                self._host,
+                port=self._port,
+                user=user_id,
+                password=self._password,
+                verify_ssl=self._verify_ssl,
+                timeout=30,
+            )
 
     def get_api_client(self) -> ProxmoxAPI:
         """Return the ProxmoxAPI client."""
@@ -78,7 +82,6 @@ def get_api(
     api_path: str,
 ) -> dict[str, Any] | None:
     """Return data from the Proxmox API."""
-
     api_result = proxmox.get(api_path)
     LOGGER.debug("API GET Response - %s: %s", api_path, api_result)
     return api_result
@@ -89,7 +92,6 @@ def post_api(
     api_path: str,
 ) -> dict[str, Any] | None:
     """Post data to Proxmox API."""
-
     api_result = proxmox.post(api_path)
     LOGGER.debug("API POST - %s: %s", api_path, api_result)
     return api_result
@@ -109,7 +111,8 @@ def post_api_command(
     proxmox = proxmox_client.get_api_client()
 
     if command not in ProxmoxCommand:
-        raise ValueError("Invalid Command")
+        msg = "Invalid Command"
+        raise ValueError(msg)
 
     if api_category is ProxmoxType.Node:
         issue_id = f"{self.config_entry.entry_id}_{node}_command_forbiden"
@@ -117,10 +120,11 @@ def post_api_command(
         issue_id = f"{self.config_entry.entry_id}_{vm_id}_command_forbiden"
 
     try:
-        # Only the START_ALL and STOP_ALL are not part of status API
+        # START_ALL, STOP_ALL, WAKEONLAN are not part of status API
         if api_category is ProxmoxType.Node and command in [
             ProxmoxCommand.START_ALL,
             ProxmoxCommand.STOP_ALL,
+            ProxmoxCommand.WAKEONLAN,
         ]:
             result = post_api(proxmox, f"nodes/{node}/{command}")
         elif api_category is ProxmoxType.Node:
@@ -145,12 +149,12 @@ def post_api_command(
                 resource = f"{api_category.capitalize()} {node}"
             elif api_category in (ProxmoxType.QEMU, ProxmoxType.LXC):
                 resource = f"{api_category.upper()} {vm_id}"
-            async_create_issue(
+            ir.create_issue(
                 self.hass,
                 DOMAIN,
                 issue_id,
                 is_fixable=False,
-                severity=IssueSeverity.ERROR,
+                severity=ir.IssueSeverity.ERROR,
                 translation_key="resource_command_forbiden",
                 translation_placeholders={
                     "resource": resource,
@@ -159,16 +163,18 @@ def post_api_command(
                     "command": command,
                 },
             )
+            msg = f"Proxmox {resource} {command} error - {error}"
             raise HomeAssistantError(
-                f"Proxmox {resource} {command} error - {error}",
+                msg,
             ) from error
 
     except ConnectTimeout as error:
+        msg = f"Proxmox {resource} {command} error - {error}"
         raise HomeAssistantError(
-            f"Proxmox {resource} {command} error - {error}",
+            msg,
         ) from error
 
-    async_delete_issue(
+    ir.delete_issue(
         self.hass,
         DOMAIN,
         issue_id,

@@ -1,19 +1,12 @@
 """Support for Proxmox VE."""
+
 from __future__ import annotations
 
 import warnings
+from typing import TYPE_CHECKING
 
-from proxmoxer import AuthenticationError
-from proxmoxer.core import ResourceException
-from requests.exceptions import (
-    ConnectionError as connError,
-    ConnectTimeout,
-    RetryError,
-    SSLError,
-)
-from urllib3.exceptions import InsecureRequestWarning
+import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
-
 from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.const import (
     CONF_HOST,
@@ -23,17 +16,28 @@ from homeassistant.const import (
     CONF_VERIFY_SSL,
     Platform,
 )
-from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
-from homeassistant.helpers import device_registry as dr, entity_registry as er
-import homeassistant.helpers.config_validation as cv
-from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.issue_registry import (
-    IssueSeverity,
-    async_create_issue,
-    async_delete_issue,
+from homeassistant.helpers import (
+    device_registry as dr,
 )
-from homeassistant.helpers.typing import ConfigType
+from homeassistant.helpers import (
+    entity_registry as er,
+)
+from homeassistant.helpers import (
+    issue_registry as ir,
+)
+from homeassistant.helpers.device_registry import DeviceInfo
+from proxmoxer import AuthenticationError
+from proxmoxer.core import ResourceException
+from requests.exceptions import (
+    ConnectionError as connError,
+)
+from requests.exceptions import (
+    ConnectTimeout,
+    RetryError,
+    SSLError,
+)
+from urllib3.exceptions import InsecureRequestWarning
 
 from .api import ProxmoxClient, get_api
 from .const import (
@@ -45,6 +49,7 @@ from .const import (
     CONF_QEMU,
     CONF_REALM,
     CONF_STORAGE,
+    CONF_TOKEN_NAME,
     CONF_VMS,
     COORDINATORS,
     DEFAULT_PORT,
@@ -65,7 +70,12 @@ from .coordinator import (
     ProxmoxStorageCoordinator,
     ProxmoxUpdateCoordinator,
 )
-from .models import ProxmoxDiskData
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
+    from homeassistant.helpers.typing import ConfigType
+
+    from .models import ProxmoxDiskData, ProxmoxStorageData
 
 PLATFORMS = [
     Platform.BINARY_SENSOR,
@@ -117,7 +127,6 @@ warnings.filterwarnings("ignore", category=InsecureRequestWarning)
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the platform."""
-
     # import to config flow
     if DOMAIN in config:
         LOGGER.warning(
@@ -127,13 +136,13 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             "YAML configuration from your configuration.yaml file",
             VERSION_REMOVE_YAML,
         )
-        async_create_issue(
+        ir.async_create_issue(
             hass,
             DOMAIN,
             "yaml_deprecated",
             breaks_in_ha_version=VERSION_REMOVE_YAML,
             is_fixable=False,
-            severity=IssueSeverity.WARNING,
+            severity=ir.IssueSeverity.WARNING,
             translation_key="yaml_deprecated",
             translation_placeholders={
                 "integration": INTEGRATION_TITLE,
@@ -143,12 +152,12 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         )
         for conf in config[DOMAIN]:
             if conf.get(CONF_PORT) > 65535 or conf.get(CONF_PORT) <= 0:
-                async_create_issue(
+                ir.async_create_issue(
                     hass,
                     DOMAIN,
                     f"{conf.get[CONF_HOST]}_{conf.get[CONF_PORT]}_import_invalid_port",
                     is_fixable=False,
-                    severity=IssueSeverity.ERROR,
+                    severity=ir.IssueSeverity.ERROR,
                     translation_key="import_invalid_port",
                     translation_placeholders={
                         "integration": INTEGRATION_TITLE,
@@ -196,6 +205,7 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
             CONF_HOST: config_entry.data.get(CONF_HOST),
             CONF_PORT: config_entry.data.get(CONF_PORT),
             CONF_USERNAME: config_entry.data.get(CONF_USERNAME),
+            CONF_TOKEN_NAME: config_entry.data.get(CONF_TOKEN_NAME),
             CONF_PASSWORD: config_entry.data.get(CONF_PASSWORD),
             CONF_REALM: config_entry.data.get(CONF_REALM),
             CONF_VERIFY_SSL: config_entry.data.get(CONF_VERIFY_SSL),
@@ -204,8 +214,13 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
             CONF_LXC: config_entry.data.get(CONF_LXC),
         }
 
-        config_entry.version = 2
-        hass.config_entries.async_update_entry(config_entry, data=data_new, options={})
+        hass.config_entries.async_update_entry(
+            config_entry,
+            data=data_new,
+            options={},
+            version=2,
+            minor_version=1,
+        )
 
         LOGGER.debug("Migration - remove devices: %s", device_identifiers)
         for device_identifier in device_identifiers:
@@ -235,9 +250,12 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
         for resource in config_entry.data[CONF_LXC]:
             device_identifiers.append(f"{ProxmoxType.LXC.upper()}_{resource}")
 
-        config_entry.version = 3
         hass.config_entries.async_update_entry(
-            config_entry, data=config_entry.data, options={}
+            config_entry,
+            data=config_entry.data,
+            options={},
+            version=3,
+            minor_version=1,
         )
 
         LOGGER.debug("Migration - remove devices: %s", device_identifiers)
@@ -260,11 +278,11 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
             )
 
     if config_entry.version == 3:
-        config_entry.version = 4
         data_new = {
             CONF_HOST: config_entry.data.get(CONF_HOST),
             CONF_PORT: config_entry.data.get(CONF_PORT),
             CONF_USERNAME: config_entry.data.get(CONF_USERNAME),
+            CONF_TOKEN_NAME: config_entry.data.get(CONF_TOKEN_NAME),
             CONF_PASSWORD: config_entry.data.get(CONF_PASSWORD),
             CONF_REALM: config_entry.data.get(CONF_REALM),
             CONF_VERIFY_SSL: config_entry.data.get(CONF_VERIFY_SSL),
@@ -273,7 +291,53 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
             CONF_LXC: config_entry.data.get(CONF_LXC),
             CONF_STORAGE: [],
         }
-        hass.config_entries.async_update_entry(config_entry, data=data_new, options={})
+        hass.config_entries.async_update_entry(
+            config_entry,
+            data=data_new,
+            options={},
+            version=4,
+            minor_version=1,
+        )
+
+    if config_entry.version == 4:
+        for storage in config_entry.data.get(CONF_STORAGE):
+            dev_reg = dr.async_get(hass)
+            device = dev_reg.async_get_or_create(
+                config_entry_id=config_entry.entry_id,
+                identifiers={
+                    (
+                        DOMAIN,
+                        (
+                            f"{config_entry.entry_id}_{ProxmoxType.Storage.upper()}_{storage}"
+                        ),
+                    )
+                },
+            )
+            dev_reg.async_update_device(
+                device_id=device.id,
+                remove_config_entry_id=config_entry.entry_id,
+            )
+
+        data_new = {
+            CONF_HOST: config_entry.data.get(CONF_HOST),
+            CONF_PORT: config_entry.data.get(CONF_PORT),
+            CONF_USERNAME: config_entry.data.get(CONF_USERNAME),
+            CONF_TOKEN_NAME: config_entry.data.get(CONF_TOKEN_NAME),
+            CONF_PASSWORD: config_entry.data.get(CONF_PASSWORD),
+            CONF_REALM: config_entry.data.get(CONF_REALM),
+            CONF_VERIFY_SSL: config_entry.data.get(CONF_VERIFY_SSL),
+            CONF_NODES: config_entry.data.get(CONF_NODES),
+            CONF_QEMU: config_entry.data.get(CONF_QEMU),
+            CONF_LXC: config_entry.data.get(CONF_LXC),
+            CONF_STORAGE: [],
+        }
+        hass.config_entries.async_update_entry(
+            config_entry,
+            data=data_new,
+            options={},
+            version=5,
+            minor_version=1,
+        )
 
     LOGGER.info("Migration to version %s successful", config_entry.version)
 
@@ -282,13 +346,13 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Set up the platform."""
-
     hass.data.setdefault(DOMAIN, {})
     entry_data = config_entry.data
 
     host = entry_data[CONF_HOST]
     port = entry_data[CONF_PORT]
     user = entry_data[CONF_USERNAME]
+    token_name = entry_data[CONF_TOKEN_NAME]
     realm = entry_data[CONF_REALM]
     password = entry_data[CONF_PASSWORD]
     verify_ssl = entry_data[CONF_VERIFY_SSL]
@@ -298,6 +362,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         host=host,
         port=port,
         user=user,
+        token_name=token_name,
         realm=realm,
         password=password,
         verify_ssl=verify_ssl,
@@ -307,22 +372,20 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     except AuthenticationError as error:
         raise ConfigEntryAuthFailed from error
     except SSLError as error:
-        raise ConfigEntryNotReady(
+        msg = (
             "Unable to verify proxmox server SSL. Try using 'verify_ssl: false' "
             f"for proxmox instance {host}:{port}"
-        ) from error
+        )
+        raise ConfigEntryNotReady(msg) from error
     except ConnectTimeout as error:
-        raise ConfigEntryNotReady(
-            f"Connection to host {host} timed out during setup"
-        ) from error
+        msg = f"Connection to host {host} timed out during setup"
+        raise ConfigEntryNotReady(msg) from error
     except RetryError as error:
-        raise ConfigEntryNotReady(
-            f"Connection is unreachable to host {host}"
-        ) from error
+        msg = f"Connection is unreachable to host {host}"
+        raise ConfigEntryNotReady(msg) from error
     except connError as error:
-        raise ConfigEntryNotReady(
-            f"Connection is unreachable to host {host}"
-        ) from error
+        msg = f"Connection is unreachable to host {host}"
+        raise ConfigEntryNotReady(msg) from error
     except ResourceException as error:
         raise ConfigEntryNotReady from error
 
@@ -347,7 +410,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             node_proxmox["node"]
             for node_proxmox in (nodes_api if nodes_api is not None else [])
         ]:
-            async_delete_issue(
+            ir.async_delete_issue(
                 hass,
                 DOMAIN,
                 f"{config_entry.entry_id}_{node}_resource_nonexistent",
@@ -394,12 +457,12 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                 coordinators[f"{ProxmoxType.Disk}_{node}"] = coordinators_disk
 
         else:
-            async_create_issue(
+            ir.async_create_issue(
                 hass,
                 DOMAIN,
                 f"{config_entry.entry_id}_{node}_resource_nonexistent",
                 is_fixable=False,
-                severity=IssueSeverity.ERROR,
+                severity=ir.IssueSeverity.ERROR,
                 translation_key="resource_nonexistent",
                 translation_placeholders={
                     "integration": INTEGRATION_TITLE,
@@ -417,7 +480,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             (int(resource["vmid"]) if "vmid" in resource else None)
             for resource in (resources if resources is not None else [])
         ]:
-            async_delete_issue(
+            ir.async_delete_issue(
                 hass,
                 DOMAIN,
                 f"{config_entry.entry_id}_{vm_id}_resource_nonexistent",
@@ -431,12 +494,12 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             await coordinator_qemu.async_refresh()
             coordinators[f"{ProxmoxType.QEMU}_{vm_id}"] = coordinator_qemu
         else:
-            async_create_issue(
+            ir.async_create_issue(
                 hass,
                 DOMAIN,
                 f"{config_entry.entry_id}_{vm_id}_resource_nonexistent",
                 is_fixable=False,
-                severity=IssueSeverity.ERROR,
+                severity=ir.IssueSeverity.ERROR,
                 translation_key="resource_nonexistent",
                 translation_placeholders={
                     "integration": INTEGRATION_TITLE,
@@ -454,7 +517,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             (int(resource["vmid"]) if "vmid" in resource else None)
             for resource in (resources if resources is not None else [])
         ]:
-            async_delete_issue(
+            ir.async_delete_issue(
                 hass,
                 DOMAIN,
                 f"{config_entry.entry_id}_{container_id}_resource_nonexistent",
@@ -468,12 +531,12 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             await coordinator_lxc.async_refresh()
             coordinators[f"{ProxmoxType.LXC}_{container_id}"] = coordinator_lxc
         else:
-            async_create_issue(
+            ir.async_create_issue(
                 hass,
                 DOMAIN,
                 f"{config_entry.entry_id}_{container_id}_resource_nonexistent",
                 is_fixable=False,
-                severity=IssueSeverity.ERROR,
+                severity=ir.IssueSeverity.ERROR,
                 translation_key="resource_nonexistent",
                 translation_placeholders={
                     "integration": INTEGRATION_TITLE,
@@ -488,10 +551,10 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
     for storage_id in config_entry.data[CONF_STORAGE]:
         if storage_id in [
-            (resource["storage"] if "storage" in resource else None)
+            (resource.get("id", None))
             for resource in (resources if resources is not None else [])
         ]:
-            async_delete_issue(
+            ir.async_delete_issue(
                 hass,
                 DOMAIN,
                 f"{config_entry.entry_id}_{storage_id}_resource_nonexistent",
@@ -505,12 +568,12 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             await coordinator_storage.async_refresh()
             coordinators[f"{ProxmoxType.Storage}_{storage_id}"] = coordinator_storage
         else:
-            async_create_issue(
+            ir.async_create_issue(
                 hass,
                 DOMAIN,
                 f"{config_entry.entry_id}_{storage_id}_resource_nonexistent",
                 is_fixable=False,
-                severity=IssueSeverity.ERROR,
+                severity=ir.IssueSeverity.ERROR,
                 translation_key="resource_nonexistent",
                 translation_placeholders={
                     "integration": INTEGRATION_TITLE,
@@ -519,11 +582,11 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                     "port": config_entry.data[CONF_PORT],
                     "resource_type": ProxmoxType.Storage.capitalize(),
                     "resource": storage_id,
-                    "permission": f"['perm','/storage/{storage_id}',['Datastore.Audit'],'any',1]",
+                    "permission": f"['perm','{storage_id}',['Datastore.Audit'],'any',1]",
                 },
             )
 
-    hass.data[DOMAIN][config_entry.entry_id] = {
+    config_entry.runtime_data = {
         PROXMOX_CLIENT: proxmox_client,
         COORDINATORS: coordinators,
     }
@@ -537,19 +600,15 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             create=True,
         )
 
-    for platform in PLATFORMS:
-        hass.async_create_task(
-            hass.config_entries.async_forward_entry_setup(config_entry, platform)
-        )
+    await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
 
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
-        hass.data[DOMAIN].pop(entry.entry_id)
-    return unload_ok
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    return unload_ok  # noqa: RET504
 
 
 async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -577,11 +636,10 @@ def device_info(
     node: str | None = None,
     resource_id: int | None = None,
     create: bool | None = False,
-    cordinator_resource: ProxmoxDiskData | None = None,
+    cordinator_resource: ProxmoxDiskData | ProxmoxStorageData | None = None,
 ):
     """Return the Device Info."""
-
-    coordinators = hass.data[DOMAIN][config_entry.entry_id][COORDINATORS]
+    coordinators = config_entry.runtime_data[COORDINATORS]
 
     host = config_entry.data[CONF_HOST]
     port = config_entry.data[CONF_PORT]
@@ -609,9 +667,9 @@ def device_info(
         if (coordinator_data := coordinator.data) is not None:
             node = coordinator_data.node
 
-        name = f"{api_category.capitalize()} {resource_id}"
-        identifier = f"{config_entry.entry_id}_{api_category.upper()}_{resource_id}"
-        url = f"https://{host}:{port}/#v1:0:={api_category}/{node}/{resource_id}"
+        name = cordinator_resource.name
+        identifier = f"{config_entry.entry_id}_{api_category.upper()}_{resource_id.replace("storage/", "")}"
+        url = f"https://{host}:{port}/#v1:0:={resource_id}"
         via_device = (
             DOMAIN,
             f"{config_entry.entry_id}_{ProxmoxType.Node.upper()}_{node}",
@@ -631,7 +689,8 @@ def device_info(
         model = model_processor
 
     elif api_category is ProxmoxType.Disk:
-        name = f"{api_category.capitalize()} {node}:{resource_id}"
+        model = cordinator_resource.model
+        name = f"{api_category.capitalize()} {node}: {model.replace("_"," ")} ({resource_id})"
         identifier = (
             f"{config_entry.entry_id}_{api_category.upper()}_{node}_{resource_id}"
         )
@@ -645,9 +704,9 @@ def device_info(
         else:
             disk_type = cordinator_resource.disk_type
             model = (
-                f"{disk_type.upper()} {cordinator_resource.model} "
+                f"{disk_type.upper()} {model.replace("_"," ")} "
                 if disk_type is not None
-                else f"{disk_type}{cordinator_resource.model}"
+                else f"{disk_type}{model.replace("_"," ")}"
             )
             manufacturer = cordinator_resource.vendor
             serial_number = cordinator_resource.serial
@@ -683,7 +742,7 @@ def device_info(
 
 async def async_migrate_old_unique_ids(
     hass: HomeAssistant, platform: Platform, entities
-):
+) -> None:
     """Migration of the unique id of disk entities."""
     registry = er.async_get(hass)
     for entity in entities:

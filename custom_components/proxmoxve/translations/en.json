@@ -5,7 +5,8 @@
           "description": "Proxmox host information",
           "data": {
             "host": "Host",
-            "password": "Password",
+            "password": "Password or token value",
+            "token_name": "Token name",
             "port": "Port",
             "realm": "Realm",
             "username": "Username",
@@ -29,8 +30,10 @@
           "description": "The username or password is invalid.",
           "title": "Reauthenticate Integration",
           "data": {
-            "password": "Password",
-            "username": "Username"
+            "password": "Password or token value",
+            "username": "Username",
+            "token_name": "Token name",
+            "realm": "Realm"
           }
         }
       },
@@ -111,7 +114,8 @@
         },
         "host_auth": {
           "data": {
-              "password": "Password",
+              "password": "Password or token value",
+              "token_name": "Token name",
               "realm": "Realm",
               "username": "Username",
               "verify_ssl": "Verify SSL certificate"
@@ -191,7 +195,10 @@
         },
         "reset": {
           "name": "Reset"
-        }
+        },
+        "wakeonlan": {
+          "name": "Wake-on-LAN"
+        }  
       },
       "sensor": {
         "cpu_used": {
@@ -217,6 +224,9 @@
         },
         "disk_used_perc": {
           "name": "Disk used percentage"
+        },
+        "disk_wearout": {
+          "name": "Wearout"
         },
         "life_left": {
           "name": "Life left"

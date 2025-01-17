@@ -1,21 +1,18 @@
 """Support for the Airzone diagnostics."""
+
 from __future__ import annotations
 
-from collections.abc import Mapping
 import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from attr import asdict
+from homeassistant.components.diagnostics.util import async_redact_data
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from proxmoxer.core import ResourceException
 
-from homeassistant.components.diagnostics.util import async_redact_data
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers import device_registry as dr, entity_registry as er
-from homeassistant.helpers.device_registry import DeviceEntry
-
 from .api import get_api
-from .const import CONF_DISKS_ENABLE, COORDINATORS, DOMAIN, PROXMOX_CLIENT
+from .const import CONF_DISKS_ENABLE, COORDINATORS, PROXMOX_CLIENT
 from .coordinator import (
     ProxmoxDiskCoordinator,
     ProxmoxLXCCoordinator,
@@ -24,6 +21,13 @@ from .coordinator import (
     ProxmoxStorageCoordinator,
     ProxmoxUpdateCoordinator,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from homeassistant.config_entries import ConfigEntry
+    from homeassistant.core import HomeAssistant
+    from homeassistant.helpers.device_registry import DeviceEntry
 
 TO_REDACT_CONFIG = ["host", "username", "password"]
 
@@ -38,8 +42,7 @@ async def async_get_api_data_diagnostics(
     hass: HomeAssistant, config_entry: ConfigEntry
 ) -> dict[str, Any]:
     """Get API info for diagnostics."""
-
-    proxmox_client = hass.data[DOMAIN][config_entry.entry_id][PROXMOX_CLIENT]
+    proxmox_client = config_entry.runtime_data[PROXMOX_CLIENT]
 
     proxmox = proxmox_client.get_api_client()
 
@@ -84,9 +87,9 @@ async def async_get_api_data_diagnostics(
                     nodes[node["node"]]["qemu"][qemu["vmid"]]["backups"] = error
         except ResourceException as error:
             if error.status_code == 403:
-                nodes[node["node"]]["qemu"][
-                    "error"
-                ] = "403 Forbidden: Permission check failed"
+                nodes[node["node"]]["qemu"]["error"] = (
+                    "403 Forbidden: Permission check failed"
+                )
             else:
                 nodes[node["node"]]["qemu"]["error"] = error
 
@@ -109,9 +112,9 @@ async def async_get_api_data_diagnostics(
                     nodes[node["node"]]["lxc"][lxc["vmid"]]["backups"]["error"] = error
         except ResourceException as error:
             if error.status_code == 403:
-                nodes[node["node"]]["lxc"][
-                    "error"
-                ] = "403 Forbidden: Permission check failed"
+                nodes[node["node"]]["lxc"]["error"] = (
+                    "403 Forbidden: Permission check failed"
+                )
             else:
                 nodes[node["node"]]["lxc"]["error"] = error
 
@@ -121,9 +124,9 @@ async def async_get_api_data_diagnostics(
             )
         except ResourceException as error:
             if error.status_code == 403:
-                nodes[node["node"]]["storage"][
-                    "error"
-                ] = "403 Forbidden: Permission check failed"
+                nodes[node["node"]]["storage"]["error"] = (
+                    "403 Forbidden: Permission check failed"
+                )
             else:
                 nodes[node["node"]]["storage"]["error"] = error
 
@@ -133,9 +136,9 @@ async def async_get_api_data_diagnostics(
             )
         except ResourceException as error:
             if error.status_code == 403:
-                nodes[node["node"]]["updates"][
-                    "error"
-                ] = "403 Forbidden: Permission check failed"
+                nodes[node["node"]]["updates"]["error"] = (
+                    "403 Forbidden: Permission check failed"
+                )
             else:
                 nodes[node["node"]]["updates"]["error"] = error
 
@@ -170,15 +173,15 @@ async def async_get_api_data_diagnostics(
 
             except ResourceException as error:
                 if error.status_code == 403:
-                    nodes[node["node"]]["disks"][
-                        "error"
-                    ] = "403 Forbidden: Permission check failed"
+                    nodes[node["node"]]["disks"]["error"] = (
+                        "403 Forbidden: Permission check failed"
+                    )
                 else:
                     nodes[node["node"]]["disks"]["error"] = error
         else:
-            nodes[node["node"]]["disks"][
-                "info"
-            ] = "Disk information disabled in integration configuration options"
+            nodes[node["node"]]["disks"]["info"] = (
+                "Disk information disabled in integration configuration options"
+            )
 
     return {
         "resources": resources,
@@ -190,7 +193,6 @@ async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, config_entry: ConfigEntry
 ) -> dict[str, Any]:
     """Return diagnostics for a config entry."""
-
     coordinators: dict[
         str,
         ProxmoxNodeCoordinator
@@ -199,7 +201,7 @@ async def async_get_config_entry_diagnostics(
         | ProxmoxStorageCoordinator
         | ProxmoxUpdateCoordinator
         | ProxmoxDiskCoordinator,
-    ] = hass.data[DOMAIN][config_entry.entry_id][COORDINATORS]
+    ] = config_entry.runtime_data[COORDINATORS]
 
     api_data = await async_get_api_data_diagnostics(hass, config_entry)
 
@@ -260,9 +262,9 @@ async def async_get_config_entry_diagnostics(
                     )
                     and (coordinator_sub_data := coordinator_sub.data) is not None
                 ):
-                    proxmox_coordinators[
-                        coordinator_sub.name
-                    ] = coordinator_sub_data.__dict__
+                    proxmox_coordinators[coordinator_sub.name] = (
+                        coordinator_sub_data.__dict__
+                    )
 
     return {
         "timestamp": datetime.datetime.now(),
@@ -282,7 +284,6 @@ async def async_get_device_diagnostics(
     hass: HomeAssistant, config_entry: ConfigEntry, device: DeviceEntry
 ) -> Mapping[str, Any]:
     """Return diagnostics for a device entry."""
-
     config_entry_diagnostics = await async_get_config_entry_diagnostics(
         hass, config_entry
     )

@@ -1,25 +1,34 @@
 """Binary sensor to read Proxmox VE data."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final
 
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
     BinarySensorEntityDescription,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.typing import UNDEFINED
 
-from . import COORDINATORS, DOMAIN, async_migrate_old_unique_ids, device_info
-from .const import CONF_LXC, CONF_NODES, CONF_QEMU, ProxmoxKeyAPIParse, ProxmoxType
-from .entity import ProxmoxEntity
-from .models import ProxmoxEntityDescription
+from . import COORDINATORS, async_migrate_old_unique_ids, device_info
+from .const import (
+    CONF_LXC,
+    CONF_NODES,
+    CONF_QEMU,
+    ProxmoxKeyAPIParse,
+    ProxmoxType,
+)
+from .entity import ProxmoxEntity, ProxmoxEntityDescription
+
+if TYPE_CHECKING:
+    from homeassistant.config_entries import ConfigEntry
+    from homeassistant.core import HomeAssistant
+    from homeassistant.helpers.device_registry import DeviceInfo
+    from homeassistant.helpers.entity_platform import AddEntitiesCallback
+    from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -28,9 +37,11 @@ class ProxmoxBinarySensorEntityDescription(
 ):
     """Class describing Proxmox binarysensor entities."""
 
-    on_value: Any | None = None
+    on_value: list | None = None
     inverted: bool | None = False
-    api_category: ProxmoxType | None = None  # Set when the sensor applies to only QEMU or LXC, if None applies to both.
+    api_category: ProxmoxType | None = (
+        None  # Set when the sensor applies to only QEMU or LXC, if None applies to both.
+    )
 
 
 PROXMOX_BINARYSENSOR_NODES: Final[tuple[ProxmoxBinarySensorEntityDescription, ...]] = (
@@ -38,7 +49,7 @@ PROXMOX_BINARYSENSOR_NODES: Final[tuple[ProxmoxBinarySensorEntityDescription, ..
         key=ProxmoxKeyAPIParse.STATUS,
         name="Status",
         device_class=BinarySensorDeviceClass.RUNNING,
-        on_value="online",
+        on_value=["online"],
         translation_key="status",
     ),
 )
@@ -50,7 +61,7 @@ PROXMOX_BINARYSENSOR_UPDATES: Final[
         key=ProxmoxKeyAPIParse.UPDATE_AVAIL,
         name="Updates packages",
         device_class=BinarySensorDeviceClass.UPDATE,
-        on_value=True,
+        on_value=[True],
         translation_key="update_avail",
     ),
 )
@@ -60,7 +71,7 @@ PROXMOX_BINARYSENSOR_DISKS: Final[tuple[ProxmoxBinarySensorEntityDescription, ..
         key=ProxmoxKeyAPIParse.HEALTH,
         name="Health",
         device_class=BinarySensorDeviceClass.PROBLEM,
-        on_value="PASSED",
+        on_value=["PASSED", "OK"],
         inverted=True,
         translation_key="health",
     ),
@@ -71,14 +82,14 @@ PROXMOX_BINARYSENSOR_VM: Final[tuple[ProxmoxBinarySensorEntityDescription, ...]]
         key=ProxmoxKeyAPIParse.STATUS,
         name="Status",
         device_class=BinarySensorDeviceClass.RUNNING,
-        on_value="running",
+        on_value=["running"],
         translation_key="status",
     ),
     ProxmoxBinarySensorEntityDescription(
         key=ProxmoxKeyAPIParse.HEALTH,
         name="Health",
         device_class=BinarySensorDeviceClass.PROBLEM,
-        on_value="running",
+        on_value=["running"],
         inverted=True,
         api_category=ProxmoxType.QEMU,
         translation_key="health",
@@ -92,7 +103,6 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up binary sensors."""
-
     async_add_entities(await async_setup_binary_sensors_nodes(hass, config_entry))
     async_add_entities(await async_setup_binary_sensors_qemu(hass, config_entry))
     async_add_entities(await async_setup_binary_sensors_lxc(hass, config_entry))
@@ -103,11 +113,10 @@ async def async_setup_binary_sensors_nodes(
     config_entry: ConfigEntry,
 ) -> list:
     """Set up binary sensors."""
-
     sensors = []
     migrate_unique_id_disks = []
 
-    coordinators = hass.data[DOMAIN][config_entry.entry_id][COORDINATORS]
+    coordinators = config_entry.runtime_data[COORDINATORS]
 
     for node in config_entry.data[CONF_NODES]:
         if f"{ProxmoxType.Node}_{node}" in coordinators:
@@ -118,7 +127,7 @@ async def async_setup_binary_sensors_nodes(
         # unfound node case
         if coordinator.data is not None:
             for description in PROXMOX_BINARYSENSOR_NODES:
-                if getattr(coordinator.data, description.key, False):
+                if getattr(coordinator.data, description.key, UNDEFINED) != UNDEFINED:
                     sensors.append(
                         create_binary_sensor(
                             coordinator=coordinator,
@@ -137,7 +146,10 @@ async def async_setup_binary_sensors_nodes(
             if f"{ProxmoxType.Update}_{node}" in coordinators:
                 coordinator_updates = coordinators[f"{ProxmoxType.Update}_{node}"]
                 for description in PROXMOX_BINARYSENSOR_UPDATES:
-                    if getattr(coordinator_updates.data, description.key, False):
+                    if (
+                        getattr(coordinator_updates.data, description.key, False)
+                        != UNDEFINED
+                    ):
                         sensors.append(
                             create_binary_sensor(
                                 coordinator=coordinator_updates,
@@ -153,11 +165,7 @@ async def async_setup_binary_sensors_nodes(
                             )
                         )
 
-            for coordinator_disk in (
-                coordinators[f"{ProxmoxType.Disk}_{node}"]
-                if f"{ProxmoxType.Disk}_{node}" in coordinators
-                else []
-            ):
+            for coordinator_disk in coordinators.get(f"{ProxmoxType.Disk}_{node}", []):
                 if (coordinator_data := coordinator_disk.data) is None:
                     continue
 
@@ -197,10 +205,9 @@ async def async_setup_binary_sensors_qemu(
     config_entry: ConfigEntry,
 ) -> list:
     """Set up binary sensors."""
-
     sensors = []
 
-    coordinators = hass.data[DOMAIN][config_entry.entry_id][COORDINATORS]
+    coordinators = config_entry.runtime_data[COORDINATORS]
 
     for vm_id in config_entry.data[CONF_QEMU]:
         if f"{ProxmoxType.QEMU}_{vm_id}" in coordinators:
@@ -213,7 +220,7 @@ async def async_setup_binary_sensors_qemu(
             continue
         for description in PROXMOX_BINARYSENSOR_VM:
             if description.api_category in (None, ProxmoxType.QEMU):
-                if getattr(coordinator.data, description.key, False):
+                if getattr(coordinator.data, description.key, UNDEFINED) != UNDEFINED:
                     sensors.append(
                         create_binary_sensor(
                             coordinator=coordinator,
@@ -237,10 +244,9 @@ async def async_setup_binary_sensors_lxc(
     config_entry: ConfigEntry,
 ) -> list:
     """Set up binary sensors."""
-
     sensors = []
 
-    coordinators = hass.data[DOMAIN][config_entry.entry_id][COORDINATORS]
+    coordinators = config_entry.runtime_data[COORDINATORS]
 
     for container_id in config_entry.data[CONF_LXC]:
         if f"{ProxmoxType.LXC}_{container_id}" in coordinators:
@@ -253,7 +259,7 @@ async def async_setup_binary_sensors_lxc(
             continue
         for description in PROXMOX_BINARYSENSOR_VM:
             if description.api_category in (None, ProxmoxType.LXC):
-                if getattr(coordinator.data, description.key, False):
+                if getattr(coordinator.data, description.key, UNDEFINED) != UNDEFINED:
                     sensors.append(
                         create_binary_sensor(
                             coordinator=coordinator,
@@ -311,21 +317,15 @@ class ProxmoxBinarySensorEntity(ProxmoxEntity, BinarySensorEntity):
         if (data := self.coordinator.data) is None:
             return False
 
-        if not getattr(data, self.entity_description.key):
+        if not (data_value := getattr(data, self.entity_description.key)):
             return False
 
         if self.entity_description.inverted:
-            return (
-                getattr(data, self.entity_description.key)
-                != self.entity_description.on_value
-            )
-        return (
-            getattr(data, self.entity_description.key)
-            == self.entity_description.on_value
-        )
+            return data_value not in self.entity_description.on_value
+
+        return data_value in self.entity_description.on_value
 
     @property
     def available(self) -> bool:
         """Return sensor availability."""
-
         return super().available and self.coordinator.data is not None
